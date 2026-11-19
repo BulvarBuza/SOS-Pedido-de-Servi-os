@@ -204,6 +204,7 @@ body { padding-left: 0; padding-right: 0; }
 .consent span { font-size: 14px; line-height: 1.5; }
 .consent-note { color: var(--ink); }
 [hidden] { display: none !important; }
+.hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
 </style>
 
 </head><body>
@@ -230,6 +231,7 @@ body { padding-left: 0; padding-right: 0; }
 <div class="wrap">
   <div class="layout">
     <form id="form" novalidate>
+      <div class="hp" aria-hidden="true"><label for="f-website">Não preencher este campo</label><input type="text" id="f-website" tabindex="-1" autocomplete="off"></div>
       <section class="step" aria-labelledby="h-seg">
         <h2 id="h-seg"><span class="n">1</span>Tipo de cliente</h2>
         <div class="segs" id="segs" role="radiogroup" aria-labelledby="h-seg"></div>
@@ -347,6 +349,14 @@ body { padding-left: 0; padding-right: 0; }
 <script>
 /* Contactos que recebem o pedido. Só dígitos para o WhatsApp, com indicativo (244...). Deixe vazio para mostrar apenas o botão de copiar. */
 var CONTACT = { whatsapp: "244940081111", email: "sos.limpeza.service@gmail.com" };
+
+/* REGISTO DOS PEDIDOS NA FOLHA GOOGLE (Fase 1).
+   Cole em SHEET_URL o endereço terminado em /exec da aplicação web do Apps Script (ver GUIA-FASE-1.md).
+   Se ficar vazio, os pedidos seguem só por WhatsApp. SHEET_TOKEN tem de ser igual ao TOKEN do Code.gs. */
+var SHEET_URL = "";
+var SHEET_TOKEN = "sos-limpeza-2026";
+var CONSENT_TEXT = "Autorizo a SOS Limpeza, Lda a gerir os meus dados pessoais ao abrigo da Lei n.º 22/11, de 17 de Junho, da Proteção de Dados Pessoais. Os dados partilhados neste pedido serão usados exclusivamente para esta relação comercial.";
+var lastKey = "", lastId = "";
 
 /* TABELA DE PREÇOS (Kwanzas). Para alterar, edite o campo price de cada item, ou acrescente e retire linhas. */
 var MOBILIARIO = [
@@ -584,13 +594,49 @@ function validate() {
   return first;
 }
 
-function buildMessage() {
-  return "Pedido de higienização · SOS Limpeza\n\n" + collect().map(function (e) { return e[0] + ": " + e[1]; }).join("\n") +
+function buildMessage(id) {
+  return "Pedido de higienização · SOS Limpeza" + (id ? " · n.º " + id : "") + "\n\n" + collect().map(function (e) { return e[0] + ": " + e[1]; }).join("\n") +
     "\n\nO cliente autorizou o tratamento dos dados pessoais ao abrigo da Lei n.º 22/11, de 17 de Junho, da Proteção de Dados Pessoais, para uso exclusivo desta relação comercial.";
 }
 
+function newId() {
+  var d = new Date();
+  var p = function (n) { return String(n).padStart(2, "0"); };
+  return "SOS-" + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "-" + String(Math.floor(1000 + Math.random() * 9000));
+}
+
+function buildPayload(id) {
+  var s = SEGMENTS[current], total = 0;
+  var itens = selected().map(function (it) {
+    var sub = it.qty * it.price; total += sub;
+    return it.name + " × " + it.qty + " (" + it.unit + ") = " + fmt(sub);
+  }).join("\n");
+  var detalhes = s.fields.map(function (f) { var v = val("d-" + f.id); return v ? f.label + ": " + v : ""; })
+    .filter(Boolean).join("\n");
+  return {
+    token: SHEET_TOKEN, website: val("f-website"), id: id, segmento: s.label,
+    nome: val("f-nome"), telefone: val("f-tel"), email: val("f-email"), contacto: val("f-pref"),
+    municipio: val("f-mun"), local: val("f-bairro"), data_pretendida: val("f-data"), periodo: val("f-periodo"),
+    itens: itens, total: total, detalhes: detalhes, observacoes: val("f-obs"),
+    consentimento: $("f-consent").checked, consentimento_texto: CONSENT_TEXT
+  };
+}
+
+function sendToSheet(payload) {
+  if (!SHEET_URL) return;
+  try {
+    fetch(SHEET_URL, {
+      method: "POST", mode: "no-cors", keepalive: true,
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload)
+    }).catch(function () {});
+  } catch (e) {}
+}
+
 function showResult() {
-  var msg = buildMessage();
+  var key = JSON.stringify(collect());
+  if (key !== lastKey) { lastKey = key; lastId = newId(); sendToSheet(buildPayload(lastId)); }
+  var msg = buildMessage(lastId);
   $("msg").textContent = msg;
   var acts = $("send-actions");
   acts.textContent = "";
